@@ -1,0 +1,490 @@
+try {
+library(
+      identifier: 'jsl-jenkins-shared-library-local@stable',
+      retriever: modernSCM(
+        [
+          $class: 'GitSCMSource',
+          remote: "/app/jenkins/git/jsl-jenkins-shared-library.git",
+          extensions: [[$class: 'WipeWorkspace']]
+        ]
+      )
+    ) _
+} catch (Exception Ex) {
+library(
+  identifier: 'jsl-jenkins-shared-library@stable',
+  retriever: modernSCM(
+    [
+      $class: 'GitSCMSource',
+      remote: "https://github.com/CenturyLink/jsl-jenkins-shared-library.git",
+      credentialsId: 'GITHUB_APP_CREDENTIALS',
+      extensions: [[$class: 'WipeWorkspace']]
+    ]
+  )
+) _
+}
+
+pipeline {
+    environment {
+      //  Credentials:
+      //  GITHUB_TOKEN_CREDENTIALS github token, jenkins user password credential. SCMAUTO_GITHUB contains the GitHub token from SCMAuto user, which need to have access to the repository.
+      //  GITHUB_SSH_CREDENTIALS github ssh private key, jenkins private key credential. SCMAUTO_SSH_DEVOPS_PIPELINE contains the SSH key from SCMAuto user, which need to have access to the repository.
+      //  DOCKER_CREDENTIALS Docker access info, jenkins secret file credential with environment variables to export.
+      //  KUBE_CREDENTIALS Kubernetes access info, jenkins secret file credential with environment variables to export. For PRs.
+      //  KUBE_CREDENTIALS_TEST Kubernetes access info, jenkins secret file credential with environment variables to export. For branches.
+      //  AMAZON_CREDENTIALS AWS access info, jenkins secret file credential with environment variables to export
+      //  SONARQUBE_CREDENTIALS Sonarqube access info, jenkins secret text
+      //  GCP_CREDENTIALS GCP access info, jenkins secret file credential with environment variables to export
+      //  JIRA_CREDENTIALS Jira access info, jenkins secret file credential with environment variables to export
+      //  MORPHEUS_CREDENTIALS Morpheus access info, jenkins secret text
+      //  MSTEAMS_CREDENTIALS MS Teams access info, jenkins secret text
+      //  QUALITY_GATE_CREDENTIALS Credentials to gather all the contract validation gates expected to be crossed.
+      //  PROJECT_MAL The MAL of the project
+
+      GITHUB_TOKEN_CREDENTIALS = 'GITHUB_APP_CREDENTIALS'
+      GITHUB_SSH_CREDENTIALS = 'SCMAUTO_SSH_DEVOPS_PIPELINE'
+      DOCKER_CREDENTIALS = 'nexus-creds'
+      KUBE_CREDENTIALS = 'kube-creds'
+      KUBE_CREDENTIALS_TEST = 'kube-creds'
+      KUBE_CREDENTIALS_PROD = 'kube-creds'
+      SONARQUBE_CREDENTIALS = 'sonarcicdent'
+      JIRA_CREDENTIALS = 'jira-credentials'
+      // MORPHEUS_CREDENTIALS = ''
+      MSTEAMS_CREDENTIALS = 'MSTEAMS_CREDENTIALS'
+      QUALITY_GATE_CREDENTIALS = 'CRUMBS-FILE'
+      BWIDOW_CREDENTIALS = 'bwidow'
+      CMSADM_CREDENTIALS = 'cmsadm'
+      STATIC_CREDENTIALS = 'static'
+      // Deployment control credentialsId
+      AUTHORIZED_USERS = 'authorized_users'
+      DEPLOY_AUTH_TOKEN = 'deploy_auth_token'
+
+      // NFS PATHS 
+      //
+      // LXO = jenkinsostatic01-prod agent, bwidow user
+      // LXDD = jenkinsdstatic01-prod agent, cmsadm user
+      // LXOD = jenkinsostatic01-prod agent, cmsadm user
+      DEV_COPY_PATH_LXO = '/nas/misc/content-ctl-dev/github/dev/STATIC/DOTCOM_MAIN/Vanity/'
+      DEV_COPY_PATH_LXDD = '/ecom-static-test/cms/github/dev/STATIC/DOTCOM_MAIN/Vanity/'
+      DEV_COPY_PATH_LXOD = '/ecom-static-test-backup/cms/github/dev/STATIC/DOTCOM_MAIN/Vanity/'
+      TEST_COPY_PATH_LXO = '/nas/misc/content-ctl-qa/github/qa/STATIC/DOTCOM_MAIN/Vanity/'
+      TEST_COPY_PATH_LXDD = '/ecom-static-test/cms/github/test/STATIC/DOTCOM_MAIN/Vanity/'
+      TEST_COPY_PATH_LXOD = '/ecom-static-test-backup/cms/github/test/STATIC/DOTCOM_MAIN/Vanity/'
+      PROD_COPY_PATH_LXO = '/nas/misc/content-ctl-prod/github/prod/STATIC/DOTCOM_MAIN/Vanity/'
+      PROD_COPY_PATH_LXDD = '/ecom-static-prod/cms/github/prod/STATIC/DOTCOM_MAIN/Vanity/'
+      PROD_COPY_PATH_LXOD = '/ecom-static-prod-backup/cms/github/prod/STATIC/DOTCOM_MAIN/Vanity/'
+
+      // Custom project variables
+      // Add 
+      PROJECT_NAME = 'gamut-ctl-vanity'
+      DOCKER_REPO ='ctl-portal/gamut-ctl-vanity'
+      PROJECT_MAL = "CTL-PORTAL"
+      PROD_BRANCH = 'master'
+      BRANCH_NAME = GIT_BRANCH.split('/')[-1].trim().toLowerCase()
+      COMMIT_ID = GIT_COMMIT.substring(0,7).trim().toLowerCase()
+      PULL_REQUEST="pr-${env.CHANGE_ID}"
+      IMAGE_NAME = "${env.PROJECT_NAME}"
+      IMAGE_TAG = "${env.PULL_REQUEST}"
+      KUBE_DOCKER_SECRET_NAME = "${env.PROJECT_NAME}-${env.PULL_REQUEST}"
+      KUBE_DOCKER_SECRET_NAME_TEST = "${env.PROJECT_NAME}-${env.BRANCH_NAME}"
+      KUBE_DOCKER_SECRET_NAME_PROD = "${env.PROJECT_NAME}-${env.BRANCH_NAME}"
+    }
+
+  agent {
+      label 'Docker-enabled'
+  }
+
+  options {
+    timestamps ()
+    timeout(time: 6, unit: 'HOURS')
+    buildDiscarder(logRotator(numToKeepStr:'10', daysToKeepStr: '30'))
+    disableConcurrentBuilds()
+  }
+
+  stages {
+    stage('Summary') {
+      steps {
+        script {
+          sh script: """
+              echo "PROJECT_NAME: ${PROJECT_NAME}"
+              echo "GIT_BRANCH: ${GIT_BRANCH}"
+              echo "GIT_COMMIT: ${GIT_COMMIT}"
+              echo "BRANCH_NAME: ${BRANCH_NAME}"
+              echo "COMMIT_ID: ${COMMIT_ID}"
+              echo "PULL_REQUEST: ${PULL_REQUEST}"
+              echo "CHANGE_ID: ${env.CHANGE_ID}"                       
+          """, label: "Details summary"
+        }
+      }
+    }
+//     stage('Authorize - Prod only') {
+//       when {
+//         branch 'master'
+//       }
+//       steps {
+//         script {
+//           jslDeploymentControlKnob()
+//         }
+//       }
+//     }
+    stage('Static Code Analysis') {
+      parallel {
+        stage('Linting') {
+          agent {
+            docker {
+              image 'nexusprod.corp.intranet:4567/jsl-docker-standard-images/sonarqube_agent:latest'
+              label 'Docker-enabled'
+            }
+          }
+          when {
+            branch 'master'
+          }
+          steps {
+            script {
+//               jslNpmWrapper('install --save-dev stylelint stylelint-config-standard')
+//               sh """
+//                 cat << config > .stylelintrc.json
+// {
+//   "extends": "stylelint-config-standard"
+// }
+// config
+//               """
+//               jslNpxWrapper('stylelint "**/*.css" || true')
+              echo "Disabled for testing"
+            }
+          }
+        }
+        stage('DevSecOps') {
+          steps {
+            script {
+              jslGitHubSecurityAlert()
+            }
+          }
+        }
+      }
+    }
+    stage('Test') {
+      agent {
+        docker {
+          image 'nexusprod.corp.intranet:4567/jsl-docker-standard-images/sonarqube_agent:latest'
+          label 'Docker-enabled'
+        }
+      }
+      steps {
+        script {
+          jslGenerateManualTestReport("Placeholder for Unit testing", "Check Version", env.ETS_MAJOR_VERSION, true, 1.0, "test.xml")
+          jslPublishTestResults('test.xml')
+          stash name: "TEST", includes: "test.xml"
+        }
+      }      
+    }
+    stage('Coverage') {
+      agent {
+        docker {
+          image 'nexusprod.corp.intranet:4567/jsl-docker-standard-images/sonarqube_agent:latest'
+          label 'Docker-enabled'
+        }
+      }
+      steps {
+        script {
+          jslQualityGateCodeCoverage('./cicd/SonarQube/sonar-project.properties')
+        }
+      }
+    }
+    stage('SonarQube') {
+      agent {
+        docker {
+          image 'nexusprod.corp.intranet:4567/jsl-docker-standard-images/sonarqube_agent:latest'
+          label 'Docker-enabled'
+        }
+      }
+      steps {
+        script {
+          jslSonarQubeStaticAnalysis('./cicd/SonarQube/sonar-project.properties', env.SONARQUBE_CREDENTIALS)
+        }
+      }
+    }
+    stage('Quality Gate') {
+      agent {
+        docker {
+          image 'nexusprod.corp.intranet:4567/jsl-docker-standard-images/sonarqube_agent:latest'
+          label 'Docker-enabled'
+        }
+      }
+      steps {
+        script {
+          jslQualityGate()
+        }
+      }
+    }
+    stage('Quality Gate 1') {
+      when {
+        not {
+          branch 'master'
+        }
+      }
+      agent {
+        dockerfile {
+          filename 'Dockerfile'
+          dir 'cicd/docker/qualitygate'
+          label 'Docker-enabled'
+        }
+      }
+      steps{
+        script {
+          unstash name: 'TEST'
+          jslCheckQualityGates("'test.xml'", 'QualityGate1-Unit')
+          jslAdoptionSonarStats('sonarqubeStats.json')
+          jslCheckQualityGates('sonarqubeStats.json', 'QualityGate1-StaticCodeAnalysis', 'sonarqubestats', 'cicd/qgatethresholds/qgate1-sonar.json')
+        }
+      }
+    }
+    stage('Deploy to NFS dev&test bwidow') {
+      agent {
+        label 'jenkinsostatic01-prod'
+      }
+      when {
+        branch 'master'
+      }
+      steps {
+        script {
+          dir('src') {
+            sshagent(credentials: ["${env.BWIDOW_CREDENTIALS}"]) {
+              sh """
+                chmod +x ../cicd/scripts/prepare.sh
+                ssh bwidow@jenkinsostatic01-prod.corp.intranet "bash -s lxo dev ${env.DEV_COPY_PATH_LXO}" < ../cicd/scripts/prepare.sh
+                ssh bwidow@jenkinsostatic01-prod.corp.intranet "bash -s lxo test ${env.TEST_COPY_PATH_LXO}" < ../cicd/scripts/prepare.sh
+              """
+              sh """
+                scp -r * bwidow@jenkinsostatic01-prod.corp.intranet:${env.DEV_COPY_PATH_LXO}
+                scp -r * bwidow@jenkinsostatic01-prod.corp.intranet:${env.TEST_COPY_PATH_LXO}
+                ssh bwidow@jenkinsdstatic01-prod.corp.intranet "ls -lah ${env.DEV_COPY_PATH_LXO}"
+                ssh bwidow@jenkinsdstatic01-prod.corp.intranet "ls -lah ${env.TEST_COPY_PATH_LXO}"
+              """
+            }
+          }
+        }
+      }
+    }
+    stage('Deploy to NFS dev&test lxdd cmsadm') {
+      agent {
+        label 'jenkinsdstatic01-prod'
+      }
+      when {
+        branch 'master'
+      }
+      steps {
+        script {
+          dir('src') {
+            sshagent(credentials: ["${env.CMSADM_CREDENTIALS}"]) {
+              sh """
+                chmod +x ../cicd/scripts/prepare.sh
+                ssh cmsadm@jenkinsdstatic01-prod.corp.intranet "bash -s lxdd dev ${env.DEV_COPY_PATH_LXDD}" < ../cicd/scripts/prepare.sh 
+                ssh cmsadm@jenkinsdstatic01-prod.corp.intranet "bash -s lxdd test ${env.TEST_COPY_PATH_LXDD}" < ../cicd/scripts/prepare.sh
+              """
+              sh """
+                scp -r * cmsadm@jenkinsdstatic01-prod.corp.intranet:${env.DEV_COPY_PATH_LXDD}
+                scp -r * cmsadm@jenkinsdstatic01-prod.corp.intranet:${env.TEST_COPY_PATH_LXDD}
+                ssh cmsadm@jenkinsdstatic01-prod.corp.intranet "ls -lah ${env.DEV_COPY_PATH_LXDD}"
+                ssh cmsadm@jenkinsdstatic01-prod.corp.intranet "ls -lah ${env.TEST_COPY_PATH_LXDD}"
+              """
+            }
+          }
+        }
+      }
+    }
+    stage('Deploy to NFS dev&test lxod cmsadm') {
+      agent {
+        label 'jenkinsostatic01-prod'
+      }
+      when {
+        branch 'master'
+      }
+      steps {
+        script {
+          dir('src') {
+            sshagent(credentials: ["${env.CMSADM_CREDENTIALS}"]) {
+              sh """
+                chmod +x ../cicd/scripts/prepare.sh
+                ssh cmsadm@jenkinsostatic01-prod.corp.intranet "bash -s lxod dev ${env.DEV_COPY_PATH_LXOD}" < ../cicd/scripts/prepare.sh
+                ssh cmsadm@jenkinsostatic01-prod.corp.intranet "bash -s lxod test ${env.TEST_COPY_PATH_LXOD}" < ../cicd/scripts/prepare.sh
+              """
+              sh """
+                scp -r * cmsadm@jenkinsostatic01-prod.corp.intranet:${env.DEV_COPY_PATH_LXOD}
+                scp -r * cmsadm@jenkinsostatic01-prod.corp.intranet:${env.TEST_COPY_PATH_LXOD}
+                ssh cmsadm@jenkinsdstatic01-prod.corp.intranet "ls -lah ${env.DEV_COPY_PATH_LXOD}"
+                ssh cmsadm@jenkinsdstatic01-prod.corp.intranet "ls -lah ${env.TEST_COPY_PATH_LXOD}"
+              """
+            }
+          }
+        }
+      }
+    }
+    stage('Deploy to NFS PROD bwidow') {
+      agent {
+        label 'jenkinsostatic01-prod'
+      }
+      when {
+        branch 'master'
+      }
+      steps {
+        script {
+          dir('src') {
+            sshagent(credentials: ["${env.BWIDOW_CREDENTIALS}"]) {
+              sh """
+                chmod +x ../cicd/scripts/prepare.sh
+                ssh bwidow@jenkinsostatic01-prod.corp.intranet "bash -s lxo prod ${env.PROD_COPY_PATH_LXO}" < ../cicd/scripts/prepare.sh
+              """
+              sh """
+                scp -r * bwidow@jenkinsostatic01-prod.corp.intranet:${env.PROD_COPY_PATH_LXO}
+                ssh bwidow@jenkinsdstatic01-prod.corp.intranet "ls -lah ${env.PROD_COPY_PATH_LXO}"
+              """
+            }
+          }
+        }
+      }
+    }
+    stage('Deploy to NFS PROD CMSADM LXDD') {
+      agent {
+        label 'jenkinsdstatic01-prod'
+      }
+      when {
+        branch 'master'
+      }
+      steps {
+        script {
+          dir('src') {
+            sshagent(credentials: ["${env.CMSADM_CREDENTIALS}"]) {
+              sh """
+                chmod +x ../cicd/scripts/prepare.sh
+                ssh cmsadm@jenkinsdstatic01-prod.corp.intranet "bash -s lxdd prod ${env.PROD_COPY_PATH_LXDD}" < ../cicd/scripts/prepare.sh 
+              """
+              sh """
+                scp -r * cmsadm@jenkinsdstatic01-prod.corp.intranet:${env.PROD_COPY_PATH_LXDD}
+                ssh cmsadm@jenkinsdstatic01-prod.corp.intranet "ls -lah ${env.PROD_COPY_PATH_LXDD}"
+              """
+            }
+          }
+        }
+      }
+    }
+    stage('Deploy to NFS PROD CMSADM LXOD') {
+      agent {
+        label 'jenkinsostatic01-prod'
+      }
+      when {
+        branch 'master'
+      }
+      steps {
+        script {
+          dir('src') {
+            sshagent(credentials: ["${env.CMSADM_CREDENTIALS}"]) {
+              sh """
+                chmod +x ../cicd/scripts/prepare.sh
+                ssh cmsadm@jenkinsostatic01-prod.corp.intranet "bash -s lxod prod ${env.PROD_COPY_PATH_LXOD}" < ../cicd/scripts/prepare.sh
+              """
+              sh """
+                scp -r * cmsadm@jenkinsostatic01-prod.corp.intranet:${env.PROD_COPY_PATH_LXOD}
+                ssh cmsadm@jenkinsdstatic01-prod.corp.intranet "ls -lah ${env.PROD_COPY_PATH_LXOD}"
+              """
+            }
+          }
+        }
+      }
+    }
+    stage('Deployments') {
+      agent {
+        label 'Docker-enabled'
+      }
+      steps {
+        script {
+          try {
+            env.CLOUD_ENVIRONMENT = jslGetLifecycleEnvironment('master',env.PROD_BRANCH)
+            if (env.CHANGE_ID == null) {
+              jslGitHubDeploymentCreate(env.GIT_BRANCH, env.CLOUD_ENVIRONMENT)
+              jslGitHubDeploymentSetStatus(env.GIT_BRANCH,'in_progress', null, env.GITHUB_TOKEN_CREDENTIALS, env.CLOUD_ENVIRONMENT)
+            }
+            if (env.CHANGE_ID == null) {
+              jslGitHubDeploymentSetStatus(env.GIT_BRANCH,'success', null, env.GITHUB_TOKEN_CREDENTIALS, env.CLOUD_ENVIRONMENT)
+            }
+          } catch (Exception e) {
+            if (e.toString() =~ /.*FlowInterruptedException.*/) {
+              echo "Deployment Aborted"
+            } else {
+              if (env.CHANGE_ID == null) {
+                jslGitHubDeploymentSetStatus(env.GIT_BRANCH,'failure', null, env.GITHUB_TOKEN_CREDENTIALS, env.CLOUD_ENVIRONMENT)
+              }
+              error("Deployment has failed due to the following exception " + e.toString())
+            }
+          }
+        }
+      }
+    }
+    stage('E2E Testing') {
+      when {
+        branch 'master'
+      }
+      agent {
+        docker {
+          image 'nexusprod.corp.intranet:4567/jsl-docker-standard-images/jdk1_8_agent:latest'
+          label 'Docker-enabled'
+        }
+      }
+      steps {
+        script {
+          jslGenerateManualTestReport("Placeholder for E2E testing", "Check Version", env.ETS_MAJOR_VERSION, true, 1.0, "test2.xml")
+          jslPublishTestResults('test2.xml')
+          stash name: "TEST2", includes: "test2.xml"
+        }
+      }
+    }
+    stage('Quality Gate 2/Quality Gate 7') {
+      when {
+        branch 'master'
+      }
+      agent {
+        docker {
+          image 'nexusprod.corp.intranet:4567/jsl-docker-standard-images/jira_agent:latest'
+          label 'Docker-enabled'
+        }
+      }
+      steps{
+        script {
+          unstash name: 'TEST2'
+          if (env.GIT_BRANCH ==~ env.PROD_BRANCH) {
+            jslPostQualityGate7Validation("'test2.xml'")
+          } else {
+            jslCheckQualityGates("'test2.xml'", 'QualityGate2-Functional')
+          }
+        }
+      }
+    }
+    stage('Adoption Stats') {
+      agent {
+        docker {
+          image 'nexusprod.corp.intranet:4567/jsl-docker-standard-images/jira_agent:latest'
+          label 'Docker-enabled'
+        }
+      }
+      steps {
+        script {
+          unstash name: "TEST"
+          jslAdoptionMain('test.xml')
+        }
+      }
+    }
+  }
+  post {
+    success {
+      jslNotification('success')
+      cleanWs()
+    }
+    failure {
+      jslNotification('failure')
+      cleanWs()
+    }
+    unstable {
+      jslNotification('unstable')
+      cleanWs()
+    }
+  }
+}
